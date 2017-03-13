@@ -771,7 +771,8 @@ static void hyper_unmount_all(void)
 		    strcmp(mnt->mnt_type, "ramfs") == 0 ||
 		    strcmp(mnt->mnt_type, "tmpfs") == 0 ||
 		    strcmp(mnt->mnt_type, "rootfs") == 0 ||
-		    strcmp(mnt->mnt_type, "devpts") == 0)
+		    strcmp(mnt->mnt_type, "devpts") == 0 ||
+		    strcmp(mnt->mnt_type, "cgroup") == 0)
 			continue;
 
 		mntlist[n++] = strdup(mnt->mnt_dir);

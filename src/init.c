@@ -20,6 +20,7 @@
 #include <inttypes.h>
 #include <ctype.h>
 #include <sys/prctl.h>
+#include <sys/eventfd.h>
 
 #include "../config.h"
 #include "hyper.h"
@@ -44,6 +45,7 @@ struct hyper_epoll hyper_epoll;
 sigset_t orig_mask;
 
 static int hyper_handle_exit(struct hyper_pod *pod);
+static int hyper_watch_pod_oom(int pid);
 
 static int hyper_set_win_size(struct hyper_pod *pod, char *json, int length)
 {
@@ -329,6 +331,11 @@ static int hyper_setup_pod_init(struct hyper_pod *pod)
 
 	if (type != READY) {
 		fprintf(stderr, "get incorrect message type %d, expect READY\n", type);
+		goto out;
+	}
+
+	if (hyper_watch_pod_oom(init_pid) < 0) {
+		fprintf(stderr, "watch pod init %d oom failed\n", init_pid);
 		goto out;
 	}
 
@@ -1342,6 +1349,94 @@ static struct hyper_event_ops hyper_vsock_msg_listen_ops = {
 	.read		= hyper_vsock_msg_accept,
 };
 
+static int hyper_watch_pod_oom(int pid)
+{
+	int fd;
+	char buf[16];
+
+	fd = open("/sys/fs/cgroup/memory/hyperstart/tasks", O_WRONLY);
+	if (fd < 0) {
+		perror("failed to open memcg tasks file");
+		return -1;
+	}
+
+	sprintf(buf, "%d", pid);
+	if (write(fd, buf, strlen(buf)) < 0) {
+		perror("failed to write pod init pid to memcg task");
+		close(fd);
+		return -1;
+	}
+	fprintf(stdout, "add pod init pid %d to memcg task list\n", pid);
+
+	close(fd);
+	return 0;
+}
+
+static int hyper_setup_oom_watchdog(void)
+{
+	int fd, oomctl, eventctl;
+	char buf[32];
+
+	if (hyper_mkdir("/sys/fs/cgroup", 0755) < 0) {
+		perror("failed to create cgroup root dir");
+		return -1;
+	}
+
+	if (mount("cgroup_root", "/sys/fs/cgroup", "tmpfs", 0, NULL) < 0) {
+		perror("failed to mount cgroup root");
+		return -1;
+	}
+
+	if (hyper_mkdir("/sys/fs/cgroup/memory", 0755) < 0) {
+		perror("failed to create cgroup memory dir");
+		return -1;
+	}
+
+	if (mount("cgroup", "/sys/fs/cgroup/memory", "cgroup", 0, "memory") < 0) {
+		perror("failed to mount cgroup memory");
+		return -1;
+	}
+
+	if (hyper_mkdir("/sys/fs/cgroup/memory/hyperstart", 0755) < 0) {
+		perror("failed to create hyperstart memcg");
+		return -1;
+	}
+
+	fd = eventfd(0, EFD_CLOEXEC);
+	if (fd < 0) {
+		perror("failed to create oom watchdog eventfd");
+		return -1;
+	}
+
+	oomctl = open("/sys/fs/cgroup/memory/hyperstart/memory.oom_control", O_RDONLY);
+	if (oomctl < 0) {
+		perror("failed to open oom control file");
+		close(fd);
+		return -1;
+	}
+
+	eventctl = open("/sys/fs/cgroup/memory/hyperstart/cgroup.event_control", O_WRONLY);
+	if (oomctl < 0) {
+		close(oomctl);
+		close(fd);
+		perror("failed to open oom control file");
+		return -1;
+	}
+
+	sprintf(buf, "%d %d", fd, oomctl);
+	if (write(eventctl, buf, strlen(buf)) < 0) {
+		close(eventctl);
+		close(oomctl);
+		close(fd);
+		perror("failed to write oom watchdog to cgroup event_control");
+		return -1;
+	}
+
+	close(eventctl);
+	close(oomctl);
+	return fd;
+}
+
 static int hyper_loop(void)
 {
 	int i, n;
@@ -1555,9 +1650,17 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	hyper_epoll.oom.fd = hyper_setup_oom_watchdog();
+	if (hyper_epoll.oom.fd < 0) {
+		fprintf(stderr, "fail to setup hyper oom watchdog\n");
+		/* ignore errors in case cgroup is not enabled */
+	}
+
 	hyper_loop();
 
 out:
+	if (hyper_epoll.oom.fd > 0)
+		close(hyper_epoll.oom.fd);
 	if (hyper_epoll.vsock_ctl_listener.fd > 0)
 		close(hyper_epoll.vsock_ctl_listener.fd);
 	if (hyper_epoll.vsock_msg_listener.fd > 0)
