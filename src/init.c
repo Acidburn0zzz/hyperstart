@@ -1293,6 +1293,20 @@ static int hyper_channel_write(struct hyper_event *he, int efd, int events)
 	return hyper_event_write(he, efd, events);
 }
 
+static int hyper_oomfd_read(struct hyper_event *e, int efd, int events)
+{
+	struct hyper_pod *pod = e->ptr;
+	uint64_t cnt;
+
+	if (nonblock_read(e->fd, &cnt, sizeof(cnt)) < 0) {
+		fprintf(stderr, "%s failed\n", __func__);
+		return -1;
+	}
+
+	pod->oom_cnt += cnt;
+	return 0;
+}
+
 static struct hyper_event_ops hyper_ctlfd_ops = {
 	.read		= hyper_ctlfd_read,
 	.write		= hyper_channel_write,
@@ -1321,6 +1335,10 @@ static struct hyper_event_ops hyper_vsock_ttyfd_ops = {
 	.hup		= hyper_event_hup,
 	.rbuf_size	= 65536,
 	.wbuf_size	= 65536,
+};
+
+static struct hyper_event_ops hyper_oomfd_ops = {
+	.read		= hyper_oomfd_read,
 };
 
 static int hyper_vsock_ctl_accept(struct hyper_event *he, int efd, int events)
@@ -1520,6 +1538,15 @@ static int hyper_loop(void)
 			&hyper_epoll.tty, &hyper_ttyfd_ops, hyper_epoll.tty.fd);
 		if (hyper_init_event(&hyper_epoll.tty, &hyper_ttyfd_ops, pod) < 0 ||
 		    hyper_add_event(hyper_epoll.efd, &hyper_epoll.tty, EPOLLIN) < 0) {
+			return -1;
+		}
+	}
+
+	if (hyper_epoll.oom.fd > 0) {
+		fprintf(stdout, "hyper_init_event hyper oomfd event %p, ops %p, fd %d\n",
+			&hyper_epoll.oom, &hyper_oomfd_ops, hyper_epoll.oom.fd);
+		if (hyper_init_event(&hyper_epoll.oom, &hyper_oomfd_ops, pod) < 0 ||
+		    hyper_add_event(hyper_epoll.efd, &hyper_epoll.oom, EPOLLIN) < 0) {
 			return -1;
 		}
 	}

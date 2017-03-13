@@ -33,6 +33,7 @@ struct hyper_pod {
 	uint32_t		d_num;
 	/* how many containers are running */
 	uint32_t		remains;
+	uint64_t		oom_cnt;
 	int			req_destroy;
 	int			efd;
 };
