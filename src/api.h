@@ -41,6 +41,12 @@ enum {
 #define HYPERSTART_EXEC_CONTAINER "hyperstart"
 
 /*
+ * Special exit code indicating possible OOM-killed event.
+ * 1161 = 128 + SIGKILL + 1024
+ */
+#define HYPERSTART_EXEC_OOM_KILLED (1161)
+
+/*
  * control message format
  * | ctrl id | length  | payload (length-8)      |
  * | . . . . | . . . . | . . . . . . . . . . . . |

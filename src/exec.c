@@ -847,10 +847,14 @@ int hyper_handle_exec_exit(struct hyper_pod *pod, int pid, uint8_t code)
 		return 0;
 	}
 
-	fprintf(stdout, "%s exec exit pid %d, seq %" PRIu64 ", container %s\n",
-		__func__, exec->pid, exec->seq, exec->container_id);
+	fprintf(stdout, "%s exec exit pid %d, seq %" PRIu64 ",code %d, container %s\n",
+		__func__, exec->pid, exec->seq, code, exec->container_id);
 
-	exec->code = code;
+	// possibly killed by the OOM-killer
+	if (code == (128 + SIGKILL) && pod->oom_cnt > 0)
+		exec->code = HYPERSTART_EXEC_OOM_KILLED;
+	else
+		exec->code = code;
 	exec->exit = 1;
 
 	close(exec->ptyfd);
