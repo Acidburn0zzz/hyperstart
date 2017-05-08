@@ -1,3 +1,6 @@
+Coverity Scan:
+[![Coverity Scan Build Status](https://scan.coverity.com/projects/12652/badge.svg)](https://scan.coverity.com/projects/bergwolf-hyperstart)
+
 # The init Task for HyperContainer
 
 You can get the binary installer of HyperContainer and HyperStart through [The Hyper Page](https://github.com/hyperhq/hyperd)
