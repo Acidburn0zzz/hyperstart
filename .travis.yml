@@ -9,8 +9,13 @@ go:
 env:
   - HYPER_EXEC_DRIVER=qemu    HYPER_STORAGE_DRIVER=rawblock
   - HYPER_EXEC_DRIVER=libvirt HYPER_STORAGE_DRIVER=overlay
+  global:
+   # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+   #   via the "travis encrypt" command using the project repo's public key
+   - secure: "dinSWjyn4lBkBwOFaKU1oXjdvu5O9HyTtonZ7ekrFeTpKQOvFof0UTukCTjMSaNdwT1QkCrLlh1T5c2Fq+YXYJG+aHLjG4j2eAHgT4/bBtJFSzvp9wxKpkQD5yqNZXW0tzJATQLmKBwfHYYrhWOXGtwf8x8EtPba88BQh/AXpOrhf7q14Q91yMxCuNnKYfJKLxyBKk3ekfNUlqF2iA/8FFGo0X2WmQqKDUA759izAqQ43yaAMfg7zCQfULQe7xLnogSVN0vbN0nZLff5Qa7x/ZHaETDraKUDj7O+gCrVvCtVHspTO5ljpJ6vpQgwXqoB3YptIh+Gyt85J0UFKJwCUg5B2QzKJw1/qEoTLa5M6Bsj1ggKOUA61fZ8vRP27SPSnlPeFpGTNpkg98GsO74tAqGBLXh7sfELcjzyRXXKC8Y8wJ12M4uHH3ZtzoTGNrALiZgOnofaaASCnYyB0w66fRmnKn+K09pGGQKQjZwpGhuyyNacF0Cr6jHKOcUdlqrw8zR94tEjw7QFB5HY3Uqrq1k30UpHBw3qikGRbS0CvoQCtpfyVQJSE1ywpH/jeCu+glInG3xrSTKHKQn5KPWm9V0V4pF3WStkr3RoSRLTqXEt8Gv3MPc0Egqk5DyxBnx0gGFkEeBWGx2UvlGnphypyHT4vJmpelCG2YaPsMorhHI="
 
 before_install:
+  - echo -n | openssl s_client -connect scan.coverity.com:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | sudo tee -a /etc/ssl/certs/ca-
   - sudo apt-get update -qq
   - sudo apt-get install -y -qq autoconf automake pkg-config libdevmapper-dev libsqlite3-dev libvirt-dev libvirt-bin linux-headers-$(uname -r) wget libaio1 libpixman-1-0
   - wget https://s3-us-west-1.amazonaws.com/hypercontainer-download/qemu-hyper/qemu-hyper_2.4.1-1_amd64.deb && sudo dpkg -i --force-all qemu-hyper_2.4.1-1_amd64.deb
@@ -28,3 +33,13 @@ script:
   - ./configure
   - make
   - hack/test-cmd.sh
+
+addons:
+  coverity_scan:
+    project:
+      name: "bergwolf/hyperstart"
+      description: "Coverity scan via travis-ci"
+    notification_email: bergwolf@gmail.com
+    build_command_prepend: "./autogen.sh; ./configure"
+    build_command:   "make"
+    branch_pattern: coverity_scan
