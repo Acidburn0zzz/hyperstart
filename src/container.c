@@ -134,7 +134,7 @@ static int container_setup_volume(struct hyper_container *container)
 			if (!strcmp(vol->fstype, "xfs"))
 				options = "nouuid";
 
-			if (mount(dev, path, vol->fstype, 0, options) < 0) {
+			if (hyper_mount_blockdev(dev, path, vol->fstype, options) < 0) {
 				perror("mount volume device failed");
 				return -1;
 			}
@@ -588,7 +588,7 @@ static int hyper_setup_container_rootfs(void *data)
 		if (!strncmp(container->fstype, "xfs", strlen("xfs")))
 			options = "nouuid";
 
-		if (mount(dev, root, container->fstype, 0, options) < 0) {
+		if (hyper_mount_blockdev(dev, root, container->fstype, options) < 0) {
 			perror("mount device failed");
 			goto fail;
 		}
@@ -706,6 +706,15 @@ static int hyper_setup_pty(struct hyper_container *c)
 	}
 
 	return 0;
+}
+
+static void hyper_cleanup_pty(struct hyper_container *c)
+{
+	char path[512];
+
+	sprintf(path, "/tmp/hyper/%s/devpts/", c->id);
+	if (umount(path) < 0)
+		perror("clean up container pty failed");
 }
 
 int hyper_setup_container(struct hyper_container *container, struct hyper_pod *pod)
@@ -838,6 +847,7 @@ void hyper_cleanup_container(struct hyper_container *c, struct hyper_pod *pod)
 {
 	hyper_cleanup_container_mounts(c, pod);
 	close(c->ns);
+	hyper_cleanup_pty(c);
 	hyper_cleanup_container_portmapping(c, pod);
 	hyper_free_container(c);
 }
