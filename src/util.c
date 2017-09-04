@@ -19,16 +19,12 @@
 #include <grp.h>
 #include <pwd.h>
 #include <libgen.h>
+#include <termios.h>
 
 #include "util.h"
 #include "hyper.h"
 #include "container.h"
 #include "../config.h"
-
-char *read_cmdline(void)
-{
-	return NULL;
-}
 
 int hyper_setup_env(struct env *envs, int num, bool setPATH)
 {
@@ -102,22 +98,15 @@ int hyper_find_sd(char *addr, char **dev)
 	struct dirent **list;
 	struct dirent *dir;
 	char path[512];
-	int i, num, retry = 5;
+	int i, num;
 
 	sprintf(path, "/sys/class/scsi_disk/0:0:%s/device/block/", addr);
 	fprintf(stdout, "orig dev %s, scan path %s\n", *dev, path);
 
-	for (i = 0;; i++) {
-		num = scandir(path, &list, NULL, NULL);
-		if (num < 0) {
-			if (errno != ENOENT || i >= retry) {
-				perror("scan path failed");
-				return -1;
-			}
-			usleep(20000);
-			continue;
-		}
-		break;
+	num = scandir(path, &list, NULL, NULL);
+	if (num < 0) {
+		perror("scan path failed");
+		return -1;
 	}
 
 	for (i = 0; i < num; i++) {
@@ -220,7 +209,8 @@ int hyper_getgrouplist(const char *user, gid_t group, gid_t *groups, int *ngroup
 		int j;
 		for (j = 0; gr->gr_mem && gr->gr_mem[j]; j++) {
 			if (!strcmp(gr->gr_mem[j], user)) {
-				if (nr + 1 < *ngroups)
+				fprintf(stdout, "hyper_getgrouplist() found matched group for user %s, grname: %s, gid: %d\n", user, gr->gr_name, gr->gr_gid);
+				if (nr < *ngroups)
 					groups[nr] = gr->gr_gid;
 				nr++;
 			}
@@ -228,7 +218,8 @@ int hyper_getgrouplist(const char *user, gid_t group, gid_t *groups, int *ngroup
 	}
 	fclose(file);
 	if (nr == 0) {
-		if (nr + 1 < *ngroups)
+		fprintf(stdout, "hyper_getgrouplist() adds the default group to list, gid:%d\n", group);
+		if (nr < *ngroups)
 			groups[nr] = group;
 		nr++;
 	}
@@ -239,7 +230,7 @@ int hyper_getgrouplist(const char *user, gid_t group, gid_t *groups, int *ngroup
 
 int hyper_write_file(const char *path, const char *value, size_t len)
 {
-	size_t size = 0, l;
+	ssize_t size = 0, l;
 	int fd = open(path, O_WRONLY);
 	if (fd < 0) {
 		perror("open file failed");
@@ -511,7 +502,7 @@ void online_cpu(void)
 		ret = sscanf(entry->d_name, "cpu%d", &num);
 		if (ret < 1 || num == 0) /* skip none cpu%d and cpu0 */
 			continue;
-		sprintf(path, "/sys/devices/system/cpu/%s/online", entry->d_name);
+		sprintf(path, "/sys/devices/system/cpu/cpu%d/online", num);
 		fd = open(path, O_RDWR);
 		if (fd < 0) {
 			fprintf(stderr, "open %s failed\n", path);
@@ -547,7 +538,7 @@ void online_memory(void)
 		ret = sscanf(entry->d_name, "memory%d", &num);
 		if (ret < 1 || num == 0) /* skip none memory%d and memory0 */
 			continue;
-		sprintf(path, "/sys/devices/system/memory/%s/online", entry->d_name);
+		sprintf(path, "/sys/devices/system/memory/memory%d/online", num);
 		fd = open(path, O_RDWR);
 		if (fd < 0) {
 			fprintf(stderr, "open %s failed\n", path);
@@ -561,10 +552,7 @@ void online_memory(void)
 	closedir(dir);
 }
 
-#if WITH_VBOX
-
-#include <termios.h>
-int hyper_open_channel(char *channel, int mode)
+static int hyper_open_serial(char *channel, int mode)
 {
 	struct termios term;
 	int fd = open(channel, O_RDWR | O_CLOEXEC | mode);
@@ -654,8 +642,8 @@ err:
 	ret = -1;
 	goto out;
 }
-#else
-int hyper_open_channel(char *channel, int mode)
+
+static int hyper_open_virtio_port(char *channel, int mode)
 {
 	struct dirent **list;
 	struct dirent *dir;
@@ -714,11 +702,13 @@ int hyper_open_channel(char *channel, int mode)
 	return fd;
 }
 
-int hyper_insmod(char *module)
+int hyper_open_channel(char *channel, int mode, bool is_serial)
 {
-	return 0;
+	if (is_serial)
+		return hyper_open_serial(channel, mode);
+
+	return hyper_open_virtio_port(channel, mode);
 }
-#endif
 
 int hyper_setfd_cloexec(int fd)
 {
@@ -918,22 +908,4 @@ int hyper_eventfd_send(int fd, int64_t type)
 	}
 
 	return 0;
-}
-
-/* block device might not be present when we call mount. Sleep a bit in such case */
-int hyper_mount_blockdev(const char *dev, const char *root, const char *fstype, const char *options)
-{
-	int i, retry = 5;
-
-	for (i = 0; i < retry; i++) {
-		if (mount(dev, root, fstype, 0, options) < 0) {
-			if (errno != ENOENT)
-				return -1;
-			usleep(20000);
-			continue;
-		}
-		return 0;
-	}
-
-	return -1;
 }

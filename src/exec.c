@@ -7,6 +7,7 @@
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/eventfd.h>
 #include <dirent.h>
@@ -89,7 +90,7 @@ static void stdout_hup(struct hyper_event *de, int efd)
 static void stderr_hup(struct hyper_event *de, int efd)
 {
 	struct hyper_exec *exec = container_of(de, struct hyper_exec, stderrev);
-	fprintf(stdout, "%s, seq %" PRIu64", id %s\n", __func__, exec->seq, exec->id);
+	fprintf(stdout, "%s, seq %" PRIu64", id %s\n", __func__, exec->errseq, exec->id);
 	return pts_hup(de, efd, exec);
 }
 
@@ -180,7 +181,7 @@ static int stderr_loop(struct hyper_event *de, int efd, int events)
 	struct hyper_exec *exec = container_of(de, struct hyper_exec, stderrev);
 	fprintf(stdout, "%s, seq %" PRIu64"\n", __func__, exec->errseq);
 
-	return pts_loop(de, exec->errseq ? exec->errseq : exec->seq, efd, exec);
+	return pts_loop(de, exec->errseq, efd, exec);
 }
 
 struct hyper_event_ops err_ops = {
@@ -192,7 +193,7 @@ struct hyper_event_ops err_ops = {
 
 static int hyper_setup_exec_user(struct hyper_exec *exec)
 {
-	char *user = exec->user == NULL || strlen(exec->user) == 0 ? NULL : exec->user;
+	char *user = exec->user == NULL || strlen(exec->user) == 0 ? "0" : exec->user;
 	char *group = exec->group == NULL || strlen(exec->group) == 0 ? NULL : exec->group;
 
 	uid_t uid = 0;
@@ -200,29 +201,17 @@ static int hyper_setup_exec_user(struct hyper_exec *exec)
 	int ngroups = 0;
 	gid_t *reallocgroups, *groups = NULL;
 
-	// check the config
-	if (!user && !group && exec->nr_additional_groups == 0) {
-		return 0;
-	}
-
 	// get uid
-	if (user) {
-		fprintf(stdout, "try to find the user: %s\n", user);
-		struct passwd *pwd = hyper_getpwnam(user);
-		if (pwd == NULL) {
-			perror("can't find the user");
-			unsigned long id;
-			if (!hyper_name_to_id(user, &id))
-				return -1;
-			uid = id;
-			gid = 0;
-			goto setup;
-		}
+	fprintf(stdout, "try to find the user(or uid): %s\n", user);
+	struct passwd *pwd = hyper_getpwnam(user);
+	if (pwd != NULL) {
 		uid = pwd->pw_uid;
 		gid = pwd->pw_gid;
+		fprintf(stdout, "found the user: %s, uid:%d, gid:%d\n", user, uid, gid);
 
 		// get groups of user
-		groups = malloc(sizeof(gid_t) * 10);
+		ngroups = 10;
+		groups = malloc(sizeof(gid_t) * ngroups);
 		if (groups == NULL) {
 			goto fail;
 		}
@@ -236,23 +225,18 @@ static int hyper_setup_exec_user(struct hyper_exec *exec)
 				goto fail;
 			}
 		}
+		fprintf(stdout, "get %d groups from /etc/group\n", ngroups);
 
 		// set user related envs. the container env config can overwrite it
 		setenv("USER", pwd->pw_name, 1);
 		setenv("HOME", pwd->pw_dir, 1);
 	} else {
-		ngroups = getgroups(0, NULL);
-		if (ngroups < 0) {
-			goto fail;
+		unsigned long id;
+		if (!hyper_name_to_id(user, &id)) {
+			perror("can't find the user");
+			return -1;
 		}
-		groups = malloc(sizeof(gid_t) * ngroups);
-		if (groups == NULL) {
-			goto fail;
-		}
-		ngroups = getgroups(ngroups, groups);
-		if (ngroups < 0) {
-			goto fail;
-		}
+		uid = id;
 	}
 
 	// get gid
@@ -260,10 +244,15 @@ static int hyper_setup_exec_user(struct hyper_exec *exec)
 		fprintf(stdout, "try to find the group: %s\n", group);
 		struct group *gr = hyper_getgrnam(group);
 		if (gr == NULL) {
-			perror("can't find the group");
-			goto fail;
+			unsigned long id;
+			if (!hyper_name_to_id(group, &id)) {
+				perror("can't find the group");
+				goto fail;
+			}
+			gid = id;
+		} else {
+			gid = gr->gr_gid;
 		}
-		gid = gr->gr_gid;
 	}
 
 	// append additional groups to supplementary groups
@@ -288,27 +277,32 @@ static int hyper_setup_exec_user(struct hyper_exec *exec)
 		ngroups++;
 	}
 
-setup:
 	// setup the owner of tty
 	if (exec->tty) {
+		gid_t tty_gid = gid;
 		char ptmx[512];
 		sprintf(ptmx, "/dev/pts/%d", exec->ptyno);
-		if (chown(ptmx, uid, gid) < 0) {
+
+		struct group *gr = hyper_getgrnam("tty");
+		if (gr != NULL) {
+			tty_gid = gr->gr_gid;
+		}
+		if (chown(ptmx, uid, tty_gid) < 0) {
 			perror("failed to change the owner for the slave pty file");
 			goto fail;
 		}
 	}
 
 	// apply
-	if (groups && setgroups(ngroups, groups) < 0) {
+	if (ngroups > 0 && setgroups(ngroups, groups) < 0) {
 		perror("setgroups() fails");
 		goto fail;
 	}
-	if (setgid(gid) < 0) {
+	if (gid > 0 && setgid(gid) < 0) {
 		perror("setgid() fails");
 		goto fail;
 	}
-	if (setuid(uid) < 0) {
+	if (uid > 0 && setuid(uid) < 0) {
 		perror("setuid() fails");
 		goto fail;
 	}
@@ -461,10 +455,6 @@ static int hyper_setup_stdio_events(struct hyper_exec *exec, struct stdio_config
 		hyper_setfd_cloexec(io->stdinevfd);
 		io->stdoutevfd = dup(exec->ptyfd);
 		hyper_setfd_cloexec(io->stdoutevfd);
-		if (exec->errseq == 0) {
-			io->stderrevfd = dup(exec->ptyfd);
-			hyper_setfd_cloexec(io->stderrevfd);
-		}
 	}
 
 	fprintf(stdout, "hyper_init_event exec stdin event %p, ops %p, fd %d\n",
@@ -486,6 +476,10 @@ static int hyper_setup_stdio_events(struct hyper_exec *exec, struct stdio_config
 		return -1;
 	}
 	exec->ref++;
+
+	if (exec->errseq == 0) {
+		return 0;
+	}
 
 	fprintf(stdout, "hyper_init_event exec stderr event %p, ops %p, fd %d\n",
 		&exec->stderrev, &err_ops, io->stderrevfd);
@@ -521,6 +515,20 @@ static int hyper_do_exec_cmd(struct hyper_exec *exec, int pid_efd, int process_i
 	if (chdir("/") < 0) {
 		perror("fail to change to the root of the rootfs");
 		goto out;
+	}
+
+	// from runtime-spec:
+	//   [`/dev/console`][console.4] is set up if terminal is enabled
+	//   in the config by bind mounting the pseudoterminal slave
+	//   to /dev/console.
+	if (exec->init && exec->tty) {
+		char ptyslave[32];
+
+		sprintf(ptyslave, "/dev/pts/%d", exec->ptyno);
+		if (mount(ptyslave, "/dev/console", NULL, MS_BIND, NULL) < 0) {
+			perror("fail to bind mount /dev/console");
+			goto out;
+		}
 	}
 
 	// Make sure we start with a clean environment
