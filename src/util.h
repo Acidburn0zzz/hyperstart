@@ -50,4 +50,5 @@ ssize_t nonblock_read(int fd, void *buf, size_t count);
 int hyper_mount_nfs(char *server, char *mountpoint);
 int64_t hyper_eventfd_recv(int fd);
 int hyper_eventfd_send(int fd, int64_t type);
+void hyper_dump_meminfo();
 #endif

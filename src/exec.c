@@ -657,6 +657,7 @@ int hyper_run_process(struct hyper_exec *exec)
 	pid = fork();
 	if (pid < 0) {
 		perror("fork prerequisite process failed");
+		hyper_dump_meminfo();
 		goto close_tty;
 	} else if (pid == 0) {
 		if (strcmp(exec->container_id, HYPERSTART_EXEC_CONTAINER) == 0) {

@@ -897,3 +897,26 @@ int hyper_eventfd_send(int fd, int64_t type)
 
 	return 0;
 }
+
+void hyper_dump_meminfo(void)
+{
+	const char *path = "/proc/meminfo";
+	char buffer[32];
+	int fd, size;
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		perror("open meminfo file failed");
+		return;
+	}
+
+	do {
+		size = read(fd, buffer, sizeof(buffer) - 1);
+		if (size > 0) {
+			buffer[size] = '\0';
+			fprintf(stderr, "%s", buffer);
+		}
+	} while (size > 0);
+
+	close(fd);
+}
